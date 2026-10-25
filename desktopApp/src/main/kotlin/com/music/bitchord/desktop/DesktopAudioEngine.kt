@@ -516,7 +516,8 @@ class DesktopPlaybackEngine(
             }
             resolved.fold(
                 onSuccess = { live ->
-                    openTrack(song, live.stream, startAtMs = 0).fold(
+                    val cueMs = upcomingCueMs(song)
+                    openTrack(song, live.stream, startAtMs = cueMs).fold(
                         onSuccess = { track ->
                             // A newer [prepareNext] may have asked for another track while this one
                             // was resolving.
@@ -565,7 +566,8 @@ class DesktopPlaybackEngine(
             }
             // Not heard yet: the incoming deck itself is replaced, with nothing to interrupt.
             if (upcoming?.song?.videoId == song.videoId && fadeRemaining <= 0 && !displaySwitched) {
-                openTrack(song, better, startAtMs = 0).fold(
+                val cueMs = (upcoming?.startUs ?: 0L) / 1_000
+                openTrack(song, better, startAtMs = cueMs).fold(
                     onSuccess = { commands += Command.ReplaceUpcoming(it) },
                     onFailure = { settleIncomingSearch(song) },
                 )
@@ -1165,8 +1167,13 @@ class DesktopPlaybackEngine(
                             "incoming '${track.song.title}' upgraded to " +
                                 "${track.stream.format.summary.ifBlank { "another rendition" }} before its transition",
                         )
+                        val priorCueUs = upcoming?.startUs ?: 0L
                         upcoming?.decoder?.close()
                         upcoming = track
+                        if (priorCueUs > 0 && kotlin.math.abs(track.startUs - priorCueUs) > UPGRADE_RESEEK_THRESHOLD_MS * 1_000L) {
+                            track.decoder.seek(priorCueUs)
+                            track.startUs = priorCueUs
+                        }
                         settleIncomingSearch(track.song)
                     } else {
                         // The blend began while it was opening: it is heard on the playing deck instead.
@@ -1471,6 +1478,7 @@ class DesktopPlaybackEngine(
 
         val plan = transitionPlan(track, incoming.song, (incoming.decoder.durationUs ?: 0L) / 1_000, positionMs, duration)
         publishTransitionWindow(track, plan, duration)
+        precueIncoming(track, incoming, plan)
 
         if (!plan.shouldStart || plan.blocked) return
 
@@ -1479,11 +1487,13 @@ class DesktopPlaybackEngine(
         // difference between Automix and a crossfade.
         if (plan.incomingCueTime > 0) {
             val cueUs = (plan.incomingCueTime * 1_000_000).toLong()
-            incoming.decoder.seek(cueUs)
-            // The track now begins here, and every position reported for it is measured from it.
-            // Left at zero, the scrubber and the lyrics ran the whole cue behind the audio for the
-            // rest of the track — which only a manual seek could put right.
-            incoming.startUs = cueUs
+            if (kotlin.math.abs(incoming.startUs - cueUs) > UPGRADE_RESEEK_THRESHOLD_MS * 1_000L) {
+                incoming.decoder.seek(cueUs)
+                // The track now begins here, and every position reported for it is measured from it.
+                // Left at zero, the scrubber and the lyrics ran the whole cue behind the audio for the
+                // rest of the track — which only a manual seek could put right.
+                incoming.startUs = cueUs
+            }
         }
         DesktopTrackLog.log(
             "transition into '${incoming.song.title}': ${"%.1f".format(seconds)}s" +
@@ -1529,6 +1539,39 @@ class DesktopPlaybackEngine(
                 },
             )
         }
+    }
+
+    /**
+     * Pre-cues the incoming track's background decoder as soon as Automix knows its cue point,
+     * so [DesktopDecodeAhead]'s worker thread buffers frames from the cue point in advance.
+     * When the crossfade starts, the audio thread can read the first mix block immediately
+     * without blocking on [java.util.concurrent.locks.Condition.await].
+     */
+    private fun precueIncoming(track: Track, incoming: Track, plan: TransitionPlan) {
+        if (!automixEnabled || plan.blocked || plan.incomingCueTime <= 0.0) return
+        val status = analysisStatus(track)
+        if (status.next !in MEASURED_ENOUGH_TO_ENTER_ON) return
+        val cueUs = (plan.incomingCueTime * 1_000_000).toLong()
+        if (kotlin.math.abs(incoming.startUs - cueUs) > UPGRADE_RESEEK_THRESHOLD_MS * 1_000L) {
+            DesktopTrackLog.log(
+                "precueing incoming '${incoming.song.title}' to ${"%.1f".format(plan.incomingCueTime)}s in advance",
+            )
+            // ponytail: cues incoming decoder asynchronously in the background ahead of the mix window.
+            incoming.decoder.seek(cueUs)
+            incoming.startUs = cueUs
+        }
+    }
+
+    private fun upcomingCueMs(song: Song): Long {
+        if (!automixEnabled) return 0L
+        val currentTrack = current ?: return 0L
+        val currentDuration = (currentTrack.decoder.durationUs ?: 0L) / 1_000
+        if (currentDuration <= 0) return 0L
+        val nextDuration = (song.durationText.durationSeconds() * 1_000).toLong()
+        val plan = transitionPlan(currentTrack, song, nextDuration, _state.value.positionMs, currentDuration)
+        val status = analysisStatus(currentTrack)
+        if (status.next !in MEASURED_ENOUGH_TO_ENTER_ON || plan.incomingCueTime <= 0.0) return 0L
+        return (plan.incomingCueTime * 1_000).toLong()
     }
 
     /**

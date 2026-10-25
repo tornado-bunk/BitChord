@@ -65,6 +65,9 @@ void AppendNumber(std::string& out, double value) {
   }
   char buffer[32];
   snprintf(buffer, sizeof(buffer), "%.6g", value);
+  for (char* p = buffer; *p; ++p) {
+    if (*p == ',') *p = '.';
+  }
   out += buffer;
 }
 

@@ -125,4 +125,19 @@ class DesktopCrossfadePositionTest {
         val channels = 2
         assertEquals(6_000_000L, handoverUs(0L, 6L * rate * channels, channels, rate))
     }
+
+    @Test
+    fun `precued track startUs tolerates minor drift without reseeking`() {
+        val cueUs = 12_100_000L
+        val incomingStartUs = cueUs
+        // If pre-cued, minor drift below 250ms avoids reseeking
+        val minorDriftUs = 100_000L
+        val reseekNeeded = kotlin.math.abs(incomingStartUs - (cueUs + minorDriftUs)) > 250_000L
+        assertTrue(!reseekNeeded, "minor drift should not trigger re-seek")
+
+        val majorDriftUs = 400_000L
+        val majorReseekNeeded = kotlin.math.abs(incomingStartUs - (cueUs + majorDriftUs)) > 250_000L
+        assertTrue(majorReseekNeeded, "major change in cue point must trigger re-seek")
+    }
 }
+

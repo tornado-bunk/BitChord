@@ -1,12 +1,18 @@
 # BitChord Desktop
 
 BitChord now has a Kotlin Multiplatform shared module and a Compose Multiplatform
-desktop application for Linux and Windows. Desktop uses the JVM target, which is
-the supported Compose Multiplatform desktop model; macOS is intentionally not a
-configured target.
+desktop application for macOS, Linux and Windows. Desktop uses the JVM target, which is
+the supported Compose Multiplatform desktop model.
 
-The desktop target uses Java 21. Run it on Linux with the JDK and native
-libraries available in the shell:
+The desktop target uses Java 21. Run it on macOS with Homebrew OpenJDK 21 and CMake:
+
+```bash
+brew install openjdk@21 cmake
+export JAVA_HOME=$(/usr/libexec/java_home -v 21)
+./gradlew :desktopApp:run
+```
+
+On Linux:
 
 On NixOS:
 ```bash
@@ -27,6 +33,8 @@ Nothing else has to be installed first — no JDK, no codec pack.
 
 | Platform | Download | Notes |
 |---|---|---|
+| macOS | `BitChord-<version>-macos-arm64.dmg` | Disk image for Apple Silicon (M1/M2/M3/M4). Drag and drop into Applications. |
+| macOS | `BitChord-<version>-macos-x64.dmg` | Disk image for Intel Macs. Drag and drop into Applications. |
 | Linux | `BitChord-<version>-linux-x86_64.AppImage` | `chmod +x` it and run. No install, works on any distribution. |
 | Linux | `BitChord-<version>-linux-amd64.deb` | `sudo apt install ./BitChord-*.deb` on Debian, Ubuntu and derivatives. |
 | Linux | `BitChord-<version>-linux-x86_64.rpm` | `sudo dnf install ./BitChord-*.rpm` on Fedora, RHEL and openSUSE. |
@@ -56,6 +64,12 @@ itself, because Windows expects it to be a system component.
 jpackage builds a package by driving the target platform's own tooling, so each
 one has to be built on the platform it is for. This is what CI does; see
 [`.github/workflows/release.yml`](.github/workflows/release.yml).
+
+On macOS — builds the disk image (.dmg):
+
+```bash
+bash ./gradlew :desktopApp:packageDmg
+```
 
 On Linux — `rpm`, `fakeroot` and `binutils` must be installed for the packages,
 and `file` for the AppImage:

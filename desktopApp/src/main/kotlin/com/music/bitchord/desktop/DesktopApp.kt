@@ -1589,16 +1589,31 @@ fun BitChordDesktopApp() {
     // The Windows half of the same idea. Linux has MPRIS above; on Windows this
     // is what the media keys and the volume flyout's card talk to.
     DisposableEffect(playbackEngine) {
-        DesktopWindowsMedia.start(
-            DesktopWindowsMedia.Controller(
-                onPlay = ::playFromUser,
-                onPause = ::pauseFromUser,
-                onNext = ::playNext,
-                onPrevious = ::playPrevious,
-                onStop = ::pauseFromUser,
-            ),
-        )
-        onDispose { DesktopWindowsMedia.stop() }
+        if (DesktopPlatform.isWindows) {
+            DesktopWindowsMedia.start(
+                DesktopWindowsMedia.Controller(
+                    onPlay = ::playFromUser,
+                    onPause = ::pauseFromUser,
+                    onNext = ::playNext,
+                    onPrevious = ::playPrevious,
+                    onStop = ::pauseFromUser,
+                ),
+            )
+        } else if (DesktopPlatform.isMac) {
+            DesktopMacMedia.start(
+                DesktopMacMedia.Controller(
+                    onPlay = ::playFromUser,
+                    onPause = ::pauseFromUser,
+                    onNext = ::playNext,
+                    onPrevious = ::playPrevious,
+                    onStop = ::pauseFromUser,
+                ),
+            )
+        }
+        onDispose {
+            DesktopWindowsMedia.stop()
+            DesktopMacMedia.stop()
+        }
     }
 
     LaunchedEffect(playbackSpeed) { playbackEngine.setPlaybackSpeed(playbackSpeed) }
@@ -1802,7 +1817,11 @@ fun BitChordDesktopApp() {
     }
     LaunchedEffect(playback.song?.videoId, playback.isPlaying, playback.durationMs) {
         DesktopScrobbling.onPlaybackStateChanged(playback)
-        DesktopWindowsMedia.publish(playback)
+        if (DesktopPlatform.isWindows) {
+            DesktopWindowsMedia.publish(playback)
+        } else if (DesktopPlatform.isMac) {
+            DesktopMacMedia.publish(playback)
+        }
     }
     // Refetched on opening the page rather than cached for the session: the
     // point of it is that something played elsewhere shows up here.
@@ -2313,7 +2332,7 @@ fun BitChordDesktopApp() {
     DisposableEffect(trayIconEnabled, closeToTray) {
         // The listener's choice, with the tray as its precondition: hiding with no tray to come
         // back from leaves an audible process and no window.
-        DesktopWindowVisibility.keepRunningWhenClosed = trayIconEnabled && closeToTray
+        DesktopWindowVisibility.keepRunningWhenClosed = DesktopPlatform.isMac || (trayIconEnabled && closeToTray)
         onDispose { DesktopWindowVisibility.keepRunningWhenClosed = false }
     }
     LaunchedEffect(tray, trayIconEnabled) {
@@ -2340,6 +2359,7 @@ fun BitChordDesktopApp() {
                 // WASAPI and WinRT, and exitProcess would unload those libraries under them.
                 playbackEngine.shutdown()
                 DesktopWindowsMedia.stop()
+                DesktopMacMedia.stop()
                 exitProcess(0)
             },
         )
@@ -3250,8 +3270,9 @@ fun BitChordDesktopApp() {
                                     }
                                 }
                             },
-                            onPaste = { pasted ->
+                            onPaste = { rawPasted ->
                                 scope.launch {
+                                    val pasted = DesktopBrowserCookies.normalizeCookie(rawPasted)
                                     if (!DesktopBrowserCookies.hasSigningSecret(pasted)) {
                                         signInError = "That cookie has no signing secret in it — copy the whole header."
                                     } else {
@@ -3975,9 +3996,14 @@ private fun DesktopTopBar(
     DesktopTitleBarDragArea(Modifier.fillMaxWidth().height(64.dp)) {
         Box(Modifier.fillMaxSize()) {
             Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
-            // The window's own buttons live at the head of the sidebar; a compact window has no
-            // sidebar, so there they lead this bar instead.
-            if (compact && inlineCaption) {
+            if (compact && DesktopPlatform.isMac) {
+                Spacer(
+                    Modifier
+                        .width(76.dp)
+                        .fillMaxHeight()
+                        .desktopWindowGlass(DesktopChromeEdge.BOTTOM),
+                )
+            } else if (compact && inlineCaption) {
                 Box(
                     Modifier
                         .fillMaxHeight()
@@ -4288,9 +4314,9 @@ private fun DesktopSidebar(
             .desktopWindowGlass(DesktopChromeEdge.END, fade = 0.07f),
     ) {
         Column(Modifier.fillMaxSize()) {
-            // The sidebar runs to the top of the window, so its head is the window's caption: the
-            // three buttons, and room to take hold of the window by.
-            if (inlineCaption) {
+            if (DesktopPlatform.isMac) {
+                DesktopTitleBarDragArea(Modifier.fillMaxWidth().height(SIDEBAR_CAPTION_HEIGHT))
+            } else if (inlineCaption) {
                 DesktopTitleBarDragArea(Modifier.fillMaxWidth().height(SIDEBAR_CAPTION_HEIGHT)) {
                     Box(Modifier.fillMaxSize().padding(start = 10.dp), contentAlignment = Alignment.CenterStart) {
                         DesktopWindowButtons()
@@ -4298,7 +4324,7 @@ private fun DesktopSidebar(
                 }
             }
         Column(
-            Modifier.fillMaxSize().padding(start = 12.dp, end = 12.dp, top = if (inlineCaption) 4.dp else 16.dp, bottom = 16.dp),
+            Modifier.fillMaxSize().padding(start = 12.dp, end = 12.dp, top = if (inlineCaption || DesktopPlatform.isMac) 4.dp else 16.dp, bottom = 16.dp),
         ) {
             DesktopSearchField(
                 query = query,

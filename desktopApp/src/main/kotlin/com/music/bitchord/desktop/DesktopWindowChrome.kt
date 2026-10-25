@@ -96,7 +96,7 @@ internal fun DesktopTitleBarDragArea(
 ) {
     val scope = LocalDesktopWindowScope.current
     val actions = LocalDesktopWindowActions.current
-    if (!DesktopPlatform.drawsOwnWindowFrame || scope == null) {
+    if ((!DesktopPlatform.drawsOwnWindowFrame && !DesktopPlatform.isMac) || scope == null) {
         Box(modifier) { content() }
         return
     }

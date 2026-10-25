@@ -1,6 +1,7 @@
 package com.music.bitchord.desktop
 
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import java.nio.file.Files
@@ -135,7 +136,7 @@ internal object DesktopBrowserCookies {
     }
 
     private fun readChromium(database: Path, profile: Profile): Result {
-        val linuxPassword = if (DesktopPlatform.isLinux) {
+        val browserPassword = if (DesktopPlatform.isLinux || DesktopPlatform.isMac) {
             profile.secretAttribute?.let { DesktopSecretStore.lookup(mapOf("application" to it)) }
         } else {
             null
@@ -157,7 +158,7 @@ internal object DesktopBrowserCookies {
                         val value = when {
                             !plain.isNullOrBlank() -> plain
                             sealed == null || sealed.isEmpty() -> null
-                            else -> decrypt(sealed, host, linuxPassword, windowsKey).also {
+                            else -> decrypt(sealed, host, browserPassword, windowsKey).also {
                                 if (it == null) undecipherable++
                                 if (name in SIGNING_COOKIES && sealed.hasPrefix(APP_BOUND_PREFIX)) {
                                     appBoundSigningCookie = true
@@ -186,12 +187,30 @@ internal object DesktopBrowserCookies {
     private fun decrypt(
         sealed: ByteArray,
         host: String,
-        keyringPassword: ByteArray?,
+        browserPassword: ByteArray?,
         windowsKey: ByteArray?,
-    ): String? = if (DesktopPlatform.isWindows) {
-        decryptWindows(sealed, windowsKey, host)
-    } else {
-        decryptLinux(sealed, host, keyringPassword)
+    ): String? = when {
+        DesktopPlatform.isWindows -> decryptWindows(sealed, windowsKey, host)
+        DesktopPlatform.isMac -> decryptMac(sealed, host, browserPassword)
+        else -> decryptLinux(sealed, host, browserPassword)
+    }
+
+    /** Chromium's cookie encryption on macOS (AES-128-CBC with Keychain password). */
+    private fun decryptMac(sealed: ByteArray, host: String, password: ByteArray?): String? {
+        if (sealed.size <= PREFIX_BYTES || password == null || password.isEmpty()) return null
+        val version = String(sealed, 0, PREFIX_BYTES, Charsets.US_ASCII)
+        if (version != "v10") return null
+        val plain = runCatching {
+            val key = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA1")
+                .generateSecret(PBEKeySpec(String(password, Charsets.UTF_8).toCharArray(), SALT, MAC_ITERATIONS, KEY_BITS))
+                .encoded
+            Cipher.getInstance("AES/CBC/PKCS5Padding").run {
+                init(Cipher.DECRYPT_MODE, SecretKeySpec(key, "AES"), IvParameterSpec(ByteArray(16) { ' '.code.toByte() }))
+                doFinal(sealed, PREFIX_BYTES, sealed.size - PREFIX_BYTES)
+            }
+        }.getOrElse { return null }
+
+        return String(stripHostDigest(plain, host), Charsets.UTF_8)
     }
 
     /** Chromium's AES-GCM cookie format after its browser key has been unwrapped with DPAPI. */
@@ -266,10 +285,55 @@ internal object DesktopBrowserCookies {
         DriverManager.getConnection("jdbc:sqlite:${database.toAbsolutePath()}").use(block)
     }.getOrElse { Result.Unavailable("its cookie store could not be opened: ${it.message}") }
 
+    /** Cleans up user-pasted cookie headers, JSON arrays, or Netscape format. */
+    fun normalizeCookie(raw: String): String {
+        var text = raw.trim()
+        if (text.startsWith("Cookie:", ignoreCase = true)) {
+            text = text.substring(7).trim()
+        }
+        if (text.startsWith("[") && text.endsWith("]")) {
+            runCatching {
+                val array = kotlinx.serialization.json.Json.parseToJsonElement(text).jsonArray
+                val map = LinkedHashMap<String, String>()
+                array.forEach { el ->
+                    val obj = el.jsonObject
+                    val name = obj["name"]?.jsonPrimitive?.content
+                    val value = obj["value"]?.jsonPrimitive?.content
+                    if (!name.isNullOrBlank() && !value.isNullOrBlank()) {
+                        map[name] = value
+                    }
+                }
+                if (map.isNotEmpty()) {
+                    return map.entries.joinToString("; ") { "${it.key}=${it.value}" }
+                }
+            }
+        }
+        if (text.contains("\t")) {
+            val map = LinkedHashMap<String, String>()
+            text.lines().forEach { line ->
+                val parts = line.split('\t')
+                if (parts.size >= 7) {
+                    val name = parts[5].trim()
+                    val value = parts[6].trim()
+                    if (name.isNotBlank() && value.isNotBlank()) {
+                        map[name] = value
+                    }
+                }
+            }
+            if (map.isNotEmpty()) {
+                return map.entries.joinToString("; ") { "${it.key}=${it.value}" }
+            }
+        }
+        return text
+    }
+
     /** Whether a jar can actually sign a request. */
-    fun hasSigningSecret(cookie: String): Boolean = cookie.split(';').any { entry ->
-        entry.substringBefore('=').trim() in SIGNING_COOKIES &&
-            entry.substringAfter('=', "").trim().isNotEmpty()
+    fun hasSigningSecret(cookie: String): Boolean {
+        val normalized = normalizeCookie(cookie)
+        return normalized.split(';').any { entry ->
+            entry.substringBefore('=').trim() in SIGNING_COOKIES &&
+                entry.substringAfter('=', "").trim().isNotEmpty()
+        }
     }
 
     private val SIGNING_COOKIES = setOf("SAPISID", "__Secure-3PAPISID", "__Secure-1PAPISID")
@@ -283,6 +347,7 @@ internal object DesktopBrowserCookies {
     private const val FALLBACK_PASSWORD = "peanuts"
     private val SALT = "saltysalt".toByteArray(Charsets.UTF_8)
     private const val ITERATIONS = 1
+    private const val MAC_ITERATIONS = 1003
     private const val KEY_BITS = 128
     private const val PREFIX_BYTES = 3
     private const val GCM_NONCE_BYTES = 12
@@ -344,30 +409,55 @@ internal object DesktopBrowserCookies {
 
     private data class ChromiumRoot(val browser: String, val root: Path, val secretAttribute: String?)
 
-    private fun firefoxRoots(): List<Pair<String, Path>> = if (DesktopPlatform.isWindows) {
-        val roaming = System.getenv("APPDATA")?.let(Paths::get) ?: home.resolve("AppData/Roaming")
-        listOf(
-            "Firefox" to roaming.resolve("Mozilla/Firefox/Profiles"),
-            "LibreWolf" to roaming.resolve("librewolf/Profiles"),
-            "Waterfox" to roaming.resolve("Waterfox/Profiles"),
-            "Zen" to roaming.resolve("zen/Profiles"),
-        )
-    } else {
-        LINUX_FIREFOX_ROOTS.map { (name, relative) -> name to home.resolve(relative) }
+    private fun firefoxRoots(): List<Pair<String, Path>> = when {
+        DesktopPlatform.isWindows -> {
+            val roaming = System.getenv("APPDATA")?.let(Paths::get) ?: home.resolve("AppData/Roaming")
+            listOf(
+                "Firefox" to roaming.resolve("Mozilla/Firefox/Profiles"),
+                "LibreWolf" to roaming.resolve("librewolf/Profiles"),
+                "Waterfox" to roaming.resolve("Waterfox/Profiles"),
+                "Zen" to roaming.resolve("zen/Profiles"),
+            )
+        }
+        DesktopPlatform.isMac -> {
+            val appSupport = home.resolve("Library/Application Support")
+            listOf(
+                "Firefox" to appSupport.resolve("Firefox/Profiles"),
+                "LibreWolf" to appSupport.resolve("librewolf/Profiles"),
+                "Waterfox" to appSupport.resolve("Waterfox/Profiles"),
+                "Zen" to appSupport.resolve("zen/Profiles"),
+            )
+        }
+        else -> {
+            LINUX_FIREFOX_ROOTS.map { (name, relative) -> name to home.resolve(relative) }
+        }
     }
 
-    private fun chromiumRoots(): List<ChromiumRoot> = if (DesktopPlatform.isWindows) {
-        val local = System.getenv("LOCALAPPDATA")?.let(Paths::get) ?: home.resolve("AppData/Local")
-        listOf(
-            ChromiumRoot("Chrome", local.resolve("Google/Chrome/User Data"), null),
-            ChromiumRoot("Chromium", local.resolve("Chromium/User Data"), null),
-            ChromiumRoot("Edge", local.resolve("Microsoft/Edge/User Data"), null),
-            ChromiumRoot("Brave", local.resolve("BraveSoftware/Brave-Browser/User Data"), null),
-            ChromiumRoot("Vivaldi", local.resolve("Vivaldi/User Data"), null),
-        )
-    } else {
-        LINUX_CHROMIUM_ROOTS.map { (name, spec) ->
-            ChromiumRoot(name, home.resolve(spec.first), spec.second)
+    private fun chromiumRoots(): List<ChromiumRoot> = when {
+        DesktopPlatform.isWindows -> {
+            val local = System.getenv("LOCALAPPDATA")?.let(Paths::get) ?: home.resolve("AppData/Local")
+            listOf(
+                ChromiumRoot("Chrome", local.resolve("Google/Chrome/User Data"), null),
+                ChromiumRoot("Chromium", local.resolve("Chromium/User Data"), null),
+                ChromiumRoot("Edge", local.resolve("Microsoft/Edge/User Data"), null),
+                ChromiumRoot("Brave", local.resolve("BraveSoftware/Brave-Browser/User Data"), null),
+                ChromiumRoot("Vivaldi", local.resolve("Vivaldi/User Data"), null),
+            )
+        }
+        DesktopPlatform.isMac -> {
+            val appSupport = home.resolve("Library/Application Support")
+            listOf(
+                ChromiumRoot("Chrome", appSupport.resolve("Google/Chrome"), "chrome"),
+                ChromiumRoot("Chromium", appSupport.resolve("Chromium"), "chromium"),
+                ChromiumRoot("Edge", appSupport.resolve("Microsoft Edge"), "edge"),
+                ChromiumRoot("Brave", appSupport.resolve("BraveSoftware/Brave-Browser"), "brave"),
+                ChromiumRoot("Vivaldi", appSupport.resolve("Vivaldi"), "vivaldi"),
+            )
+        }
+        else -> {
+            LINUX_CHROMIUM_ROOTS.map { (name, spec) ->
+                ChromiumRoot(name, home.resolve(spec.first), spec.second)
+            }
         }
     }
 }

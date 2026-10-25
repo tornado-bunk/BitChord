@@ -58,6 +58,10 @@ internal class DesktopDecodeAhead(
     var sampleCount: Int = 0
         private set
 
+    /** The actual stream timestamp in microseconds of the decoder's landing/position. */
+    val positionUs: Long
+        get() = (source as? DesktopAudioDecoder)?.positionUs ?: 0L
+
     private val worker = Thread(::decodeLoop, name).apply {
         isDaemon = true
         // Above the UI, below the audio thread itself.

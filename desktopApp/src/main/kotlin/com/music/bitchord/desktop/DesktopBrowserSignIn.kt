@@ -39,7 +39,7 @@ internal object DesktopBrowserSignIn {
 
     private val json = Json { ignoreUnknownKeys = true }
 
-    /** The first installed browser we can use for the interactive Windows path. */
+    /** The first installed browser we can use for the interactive sign-in path (Windows only). */
     fun preferred(): Browser? {
         if (!DesktopPlatform.isWindows) return null
         val local = environmentPath("LOCALAPPDATA", "AppData/Local")
@@ -59,10 +59,12 @@ internal object DesktopBrowserSignIn {
 
     /** Opens [browser] normally for sign-in, then reads the finished session in a headless pass. */
     suspend fun capture(browser: Browser): String = withContext(kotlinx.coroutines.Dispatchers.IO) {
-        val profile = environmentPath("LOCALAPPDATA", "AppData/Local")
-            .resolve("BitChord")
-            .resolve("Browser Sign In")
-            .resolve(browser.name)
+        val baseDir = when {
+            DesktopPlatform.isWindows -> environmentPath("LOCALAPPDATA", "AppData/Local").resolve("BitChord")
+            DesktopPlatform.isMac -> Paths.get(System.getProperty("user.home")).resolve("Library/Application Support/BitChord")
+            else -> environmentPath("XDG_DATA_HOME", ".local/share").resolve("BitChord")
+        }
+        val profile = baseDir.resolve("Browser Sign In").resolve(browser.name)
         Files.createDirectories(profile)
         val portFile = profile.resolve(DEVTOOLS_ACTIVE_PORT)
         Files.deleteIfExists(portFile)
