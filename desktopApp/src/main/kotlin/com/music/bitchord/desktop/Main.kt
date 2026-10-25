@@ -20,10 +20,10 @@ import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
 import bitchord.desktopapp.generated.resources.Res
 import bitchord.desktopapp.generated.resources.logo
+import java.awt.GraphicsEnvironment
 import java.awt.Dimension
 import java.awt.Rectangle
 import java.awt.Toolkit
-import kotlin.math.roundToInt
 import org.jetbrains.compose.resources.painterResource
 
 fun main() {
@@ -73,7 +73,15 @@ private fun desktopMain() = application {
     // Closing puts the window away rather than ending the process, while there is a tray icon to
     // bring it back from — see [DesktopWindowVisibility].
     val visible by DesktopWindowVisibility.visible.collectAsState()
-    val state = rememberWindowState(width = 1_220.dp, height = 780.dp)
+    val openingSize = remember {
+        val configuration = GraphicsEnvironment.getLocalGraphicsEnvironment().defaultScreenDevice.defaultConfiguration
+        val insets = Toolkit.getDefaultToolkit().getScreenInsets(configuration)
+        fitDesktopWindowSize(
+            configuration.bounds.width - insets.left - insets.right,
+            configuration.bounds.height - insets.top - insets.bottom,
+        )
+    }
+    val state = rememberWindowState(width = openingSize.width.dp, height = openingSize.height.dp)
     LaunchedEffect(visible) {
         if (visible && state.isMinimized) {
             state.isMinimized = false
@@ -111,7 +119,6 @@ private fun desktopMain() = application {
         resizable = true,
     ) {
         val composeWindow = window
-        val openingSize = remember { state.size }
         LaunchedEffect(composeWindow) {
             DesktopWindowVisibility.attachWindow(composeWindow)
             // AWT's default is white, and it is what shows for the frame or two a moved or resized
@@ -127,21 +134,21 @@ private fun desktopMain() = application {
                 (composeWindow.contentPane as? javax.swing.JComponent)?.isOpaque = false
                 composeWindow.rootPane.isOpaque = false
             }
-            // AWT measures this in device pixels while Compose's window state is in dp. Keeping
-            // the scale in the conversion makes the usable minimum consistent on every display.
-            val transform = composeWindow.graphicsConfiguration.defaultTransform
-            composeWindow.minimumSize = Dimension(
-                (MIN_WINDOW_WIDTH_DP * transform.scaleX).roundToInt(),
-                (MIN_WINDOW_HEIGHT_DP * transform.scaleY).roundToInt(),
+            // AWT bounds are logical screen coordinates; multiplying by Retina scale doubles them.
+            val configuration = composeWindow.graphicsConfiguration
+            val insets = Toolkit.getDefaultToolkit().getScreenInsets(configuration)
+            val screen = configuration.bounds
+            val availableWidth = screen.width - insets.left - insets.right
+            val availableHeight = screen.height - insets.top - insets.bottom
+            composeWindow.minimumSize = fitDesktopWindowSize(
+                availableWidth, availableHeight, Dimension(900, 600),
             )
-            // Setting AWT's minimum during the first composition can resize the native peer to
-            // that minimum without updating Compose's state. Compose would then keep laying out a
-            // 1220dp surface inside a 900dp window, cropping the right edge and putting its resize
-            // boundary off-screen until a maximize/restore cycle synchronised the two. Re-assert
-            // the requested opening size on the native peer so both layers start in agreement.
-            composeWindow.size = Dimension(
-                (openingSize.width.value * transform.scaleX).roundToInt(),
-                (openingSize.height.value * transform.scaleY).roundToInt(),
+            val size = fitDesktopWindowSize(availableWidth, availableHeight, openingSize)
+            composeWindow.setBounds(
+                screen.x + insets.left + (availableWidth - size.width) / 2,
+                screen.y + insets.top + (availableHeight - size.height) / 2,
+                size.width,
+                size.height,
             )
             if (DesktopPlatform.isWindows && DesktopWindowsFrame.install("BitChord")) {
                 DesktopWindowBackdrop.apply()
@@ -188,5 +195,11 @@ private fun desktopMain() = application {
     }
 }
 
-private const val MIN_WINDOW_WIDTH_DP = 900.0
-private const val MIN_WINDOW_HEIGHT_DP = 600.0
+internal fun fitDesktopWindowSize(
+    availableWidth: Int,
+    availableHeight: Int,
+    preferred: Dimension = Dimension(1_220, 780),
+): Dimension = Dimension(
+    preferred.width.coerceAtMost((availableWidth - 48).coerceAtLeast(1)),
+    preferred.height.coerceAtMost((availableHeight - 48).coerceAtLeast(1)),
+)

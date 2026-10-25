@@ -4433,14 +4433,7 @@ private fun DesktopTopBar(
     DesktopTitleBarDragArea(Modifier.fillMaxWidth().height(64.dp)) {
         Box(Modifier.fillMaxSize()) {
             Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
-            if (compact && DesktopPlatform.isMac) {
-                Spacer(
-                    Modifier
-                        .width(76.dp)
-                        .fillMaxHeight()
-                        .desktopWindowGlass(DesktopChromeEdge.BOTTOM),
-                )
-            } else if (compact && inlineCaption) {
+            if (compact && inlineCaption) {
                 Box(
                     Modifier
                         .fillMaxHeight()
@@ -4753,9 +4746,7 @@ private fun DesktopSidebar(
             .desktopWindowGlass(DesktopChromeEdge.END, fade = 0.07f),
     ) {
         Column(Modifier.fillMaxSize()) {
-            if (DesktopPlatform.isMac) {
-                DesktopTitleBarDragArea(Modifier.fillMaxWidth().height(SIDEBAR_CAPTION_HEIGHT))
-            } else if (inlineCaption) {
+            if (inlineCaption) {
                 DesktopTitleBarDragArea(Modifier.fillMaxWidth().height(SIDEBAR_CAPTION_HEIGHT)) {
                     Box(
                         Modifier
