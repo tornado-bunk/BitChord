@@ -81,7 +81,8 @@ JNIEXPORT jboolean JNICALL Java_com_music_bitchord_desktop_DesktopMacMedia_nativ
 
         [center.togglePlayPauseCommand setEnabled:YES];
         [center.togglePlayPauseCommand addTargetWithHandler:^MPRemoteCommandHandlerStatus(MPRemoteCommandEvent*) {
-            notifyButton(1);
+            const bool playing = [MPNowPlayingInfoCenter defaultCenter].playbackState == MPNowPlayingPlaybackStatePlaying;
+            notifyButton(playing ? 2 : 1);
             return MPRemoteCommandHandlerStatusSuccess;
         }];
 

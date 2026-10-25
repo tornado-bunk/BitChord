@@ -6,29 +6,33 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class DesktopWindowVisibilityTest {
-
     @Test
-    fun showRestoresVisibilityAndInvokesCallback() {
-        var restored = false
-        DesktopWindowVisibility.onRestoreWindow = { restored = true }
+    fun closeHidesWindowAndShowRestoresItWhenKeptRunning() {
+        val previous = DesktopWindowVisibility.keepRunningWhenClosed
         try {
+            DesktopWindowVisibility.keepRunningWhenClosed = true
+            DesktopWindowVisibility.show()
+            assertFalse(DesktopWindowVisibility.onCloseRequest())
+            assertFalse(DesktopWindowVisibility.visible.value)
             DesktopWindowVisibility.show()
             assertTrue(DesktopWindowVisibility.visible.value)
-            assertTrue(restored)
         } finally {
-            DesktopWindowVisibility.onRestoreWindow = null
+            DesktopWindowVisibility.keepRunningWhenClosed = previous
+            DesktopWindowVisibility.show()
         }
     }
 
     @Test
-    fun onCloseRequestHidesWindowWhenKeepRunningOrOnMac() {
-        DesktopWindowVisibility.show()
-        val shouldQuit = DesktopWindowVisibility.onCloseRequest()
-        // On macOS, closing hides the window and keeps running
-        if (DesktopPlatform.isMac) {
-            assertFalse(shouldQuit)
-            assertFalse(DesktopWindowVisibility.visible.value)
+    fun closeWithoutTrayKeepsRunningOnlyOnMac() {
+        val previous = DesktopWindowVisibility.keepRunningWhenClosed
+        try {
+            DesktopWindowVisibility.keepRunningWhenClosed = false
+            DesktopWindowVisibility.show()
+            assertEquals(!DesktopPlatform.isMac, DesktopWindowVisibility.onCloseRequest())
+            assertEquals(!DesktopPlatform.isMac, DesktopWindowVisibility.visible.value)
+        } finally {
+            DesktopWindowVisibility.keepRunningWhenClosed = previous
+            DesktopWindowVisibility.show()
         }
-        DesktopWindowVisibility.show()
     }
 }

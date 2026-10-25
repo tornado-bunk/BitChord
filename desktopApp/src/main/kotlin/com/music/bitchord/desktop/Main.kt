@@ -8,7 +8,7 @@ import com.music.bitchord.data.innertube.InnerTubeXResolver
 import com.music.bitchord.data.innertube.StreamResolver
 import com.music.bitchord.data.innertube.potoken.PoTokenGenerator
 import com.music.bitchord.data.lyrics.LyricsTranslation
-import androidx.compose.runtime.DisposableEffect
+import com.music.bitchord.data.spotify.SpotifyLibrary
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -20,9 +20,7 @@ import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
 import bitchord.desktopapp.generated.resources.Res
 import bitchord.desktopapp.generated.resources.logo
-import java.awt.Desktop
 import java.awt.Dimension
-import java.awt.EventQueue
 import java.awt.Rectangle
 import java.awt.Toolkit
 import kotlin.math.roundToInt
@@ -31,8 +29,10 @@ import org.jetbrains.compose.resources.painterResource
 fun main() {
     if (DesktopPlatform.isMac) {
         System.setProperty("apple.awt.application.appearance", "system")
-        installMacDockHandler()
     }
+    // Before any WebView exists, so the sign-in window can start over with an empty jar.
+    DesktopWebCookies.install()
+    DesktopWindowVisibility.install()
     // The player is the phone's, from the shared UI module; this is what it reads underneath.
     PlayerPlatform.install(DesktopPlayerHost)
     com.music.bitchord.ui.AppUi.install(DesktopAppUiHost)
@@ -42,6 +42,12 @@ fun main() {
         DesktopTrackLog.log("$tag/$level: $message" + (error?.let { " (${it.message})" } ?: ""))
     }
     LyricsTranslation.cacheDir = DesktopMediaCache.directory.toFile()
+    // The Spotify library both apps share, on the tokens the web player mints in JavaFX.
+    SpotifyLibrary.auth = SpotifyLibrary.Auth {
+        DesktopSpotifyToken.accessToken()?.let { SpotifyLibrary.Tokens(it, DesktopSpotifyToken.clientToken()) }
+    }
+    // Desktop follows its own language picker (zh-Hant / zh-Hans preserved).
+    com.music.bitchord.data.innertube.Innertube.appLanguage = { DesktopStrings.resolvedTag() }
     // YouTube playback is the phone's StreamResolver over InnerTubeX, with BotGuard PoTokens
     // minted in JavaFX's WebView where the phone uses Android's.
     TrackLog.echo = { level, tag, message, error ->
@@ -67,15 +73,27 @@ private fun desktopMain() = application {
     // Closing puts the window away rather than ending the process, while there is a tray icon to
     // bring it back from — see [DesktopWindowVisibility].
     val visible by DesktopWindowVisibility.visible.collectAsState()
-    // Hoisted so the player can fill the screen and the caption buttons can maximize — see
-    // [DesktopWindowMode].
-    val placement by DesktopWindowMode.placement.collectAsState()
     val state = rememberWindowState(width = 1_220.dp, height = 780.dp)
+    LaunchedEffect(visible) {
+        if (visible && state.isMinimized) {
+            state.isMinimized = false
+        }
+    }
+    // Hoisted so the player can fill the screen and the caption buttons can maximize — see
+    // [DesktopWindowMode]. Fullscreen on Windows is a native borderless window that covers the
+    // taskbar, so it needs no placement change here; only ordinary maximize does.
+    val placement by DesktopWindowMode.placement.collectAsState()
     LaunchedEffect(placement) { state.placement = placement }
     // ...and back, for the times the window is moved between placements by something that is not
     // us; see [DesktopWindowMode.adopt].
     LaunchedEffect(state) {
         snapshotFlow { state.placement }.collect(DesktopWindowMode::adopt)
+    }
+    val maximized by DesktopWindowMode.maximized.collectAsState()
+    LaunchedEffect(maximized) {
+        if (DesktopPlatform.isMac) {
+            DesktopMacFrame.updateCornerRadius(maximized)
+        }
     }
     Window(
         onCloseRequest = { if (DesktopWindowVisibility.onCloseRequest()) exitApplication() },
@@ -93,31 +111,9 @@ private fun desktopMain() = application {
         resizable = true,
     ) {
         val composeWindow = window
-        DisposableEffect(composeWindow) {
-            DesktopWindowVisibility.onRestoreWindow = {
-                EventQueue.invokeLater {
-                    if (state.isMinimized) state.isMinimized = false
-                    composeWindow.isVisible = true
-                    composeWindow.toFront()
-                    composeWindow.requestFocus()
-                }
-            }
-            onDispose {
-                DesktopWindowVisibility.onRestoreWindow = null
-            }
-        }
-        if (DesktopPlatform.isMac) {
-            composeWindow.rootPane.putClientProperty("apple.awt.fullWindowContent", true)
-            composeWindow.rootPane.putClientProperty("apple.awt.transparentTitleBar", true)
-            composeWindow.rootPane.putClientProperty("apple.awt.windowTitleVisible", false)
-        }
         val openingSize = remember { state.size }
         LaunchedEffect(composeWindow) {
-            if (DesktopPlatform.isMac) {
-                composeWindow.rootPane.putClientProperty("apple.awt.fullWindowContent", true)
-                composeWindow.rootPane.putClientProperty("apple.awt.transparentTitleBar", true)
-                composeWindow.rootPane.putClientProperty("apple.awt.windowTitleVisible", false)
-            }
+            DesktopWindowVisibility.attachWindow(composeWindow)
             // AWT's default is white, and it is what shows for the frame or two a moved or resized
             // window takes to repaint: a white band along its edges.
             // Not over a transparent window, whose clear background is what the material shows
@@ -125,6 +121,11 @@ private fun desktopMain() = application {
             if (!DesktopWindowBackdrop.available) {
                 composeWindow.background = java.awt.Color.BLACK
                 composeWindow.contentPane.background = java.awt.Color.BLACK
+            } else {
+                composeWindow.background = java.awt.Color(0, 0, 0, 0)
+                composeWindow.contentPane.background = java.awt.Color(0, 0, 0, 0)
+                (composeWindow.contentPane as? javax.swing.JComponent)?.isOpaque = false
+                composeWindow.rootPane.isOpaque = false
             }
             // AWT measures this in device pixels while Compose's window state is in dp. Keeping
             // the scale in the conversion makes the usable minimum consistent on every display.
@@ -143,6 +144,8 @@ private fun desktopMain() = application {
                 (openingSize.height.value * transform.scaleY).roundToInt(),
             )
             if (DesktopPlatform.isWindows && DesktopWindowsFrame.install("BitChord")) {
+                DesktopWindowBackdrop.apply()
+            } else if (DesktopPlatform.isMac && DesktopMacFrame.install(composeWindow)) {
                 DesktopWindowBackdrop.apply()
             }
         }
@@ -187,18 +190,3 @@ private fun desktopMain() = application {
 
 private const val MIN_WINDOW_WIDTH_DP = 900.0
 private const val MIN_WINDOW_HEIGHT_DP = 600.0
-
-private fun installMacDockHandler() {
-    if (!Desktop.isDesktopSupported()) return
-    runCatching {
-        val desktop = Desktop.getDesktop()
-        if (desktop.isSupported(Desktop.Action.APP_EVENT_REOPENED)) {
-            desktop.addAppEventListener(java.awt.desktop.AppReopenedListener {
-                DesktopTrackLog.log("macOS app reopened from dock")
-                DesktopWindowVisibility.show()
-            })
-        }
-    }.onFailure {
-        DesktopTrackLog.log("failed to install macOS dock listener: ${it.message}")
-    }
-}

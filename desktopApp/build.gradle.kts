@@ -7,7 +7,7 @@ import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 val appVersion: String = providers.gradleProperty("bitchord.version").orNull
     ?.removePrefix("v")
     ?.takeIf { it.isNotBlank() }
-    ?: "1.8-beta1"
+    ?: rootProject.extra["bitchordVersionName"].toString()
 
 /** Which platform this build is *for*, which is the host unless told otherwise. */
 val hostIsWindows = System.getProperty("os.name").contains("Windows", ignoreCase = true)
@@ -69,7 +69,8 @@ dependencies {
     implementation("com.google.zxing:core:3.5.3")
 
     implementation(project(":shared"))
-    implementation(project(":sharedUi"))
+    // Its own copy of the player and pages; the phone and TV keep :sharedUi.
+    implementation(project(":desktopUi"))
     // BotGuard, for the PoTokens YouTube's web clients need: the phone runs it in an Android
     // WebView, the desktop in JavaFX's (WebKit). Per-platform jars carry the natives.
     val javafxClassifier = when (targetOs) {
@@ -94,9 +95,9 @@ dependencies {
     implementation("org.bytedeco:ffmpeg:$ffmpegVersion:$nativeClassifier")
 
     // The same backdrop blur the Android build uses for its floating bars.
-    // On Windows, 1.7.2 keeps this Compose Desktop 1.10.3 app on the matching UI/text/animation
+    // On Windows and macOS, 1.7.2 keeps Compose Desktop 1.10.3 on the matching UI/text/animation
     // runtime. Preserve Linux's existing dependency graph exactly as it was.
-    val desktopHazeVersion = if (targetOs == "windows") "1.7.2" else "1.7.3"
+    val desktopHazeVersion = if (targetOs == "linux") "1.7.3" else "1.7.2"
     implementation("dev.chrisbanes.haze:haze:$desktopHazeVersion")
     implementation("dev.chrisbanes.haze:haze-materials:$desktopHazeVersion")
 
@@ -144,6 +145,10 @@ dependencies {
     implementation("org.graalvm.js:js-language:24.1.2")
 
     testImplementation(kotlin("test"))
+}
+
+tasks.withType<Test> {
+    systemProperty("java.awt.headless", "true")
 }
 
 kotlin {
@@ -489,6 +494,9 @@ val composeMainClass = "com.music.bitchord.desktop.MainKt"
 
 compose.desktop {
     application {
+        javaHome = javaToolchains.launcherFor(java.toolchain).map {
+            it.metadata.installationPath.asFile.absolutePath
+        }.get()
         mainClass = composeMainClass
         jvmArgs("-Xmx512m")
         jvmArgs("-XX:+UseG1GC", "-XX:G1PeriodicGCInterval=20000", "-XX:G1PeriodicGCSystemLoadThreshold=0")
@@ -517,6 +525,8 @@ compose.desktop {
 
         nativeDistributions {
             targetFormats(
+                TargetFormat.Dmg,
+                TargetFormat.Pkg,
                 TargetFormat.Exe,
                 TargetFormat.Msi,
                 TargetFormat.Deb,
@@ -561,6 +571,13 @@ compose.desktop {
                 bundleID = "com.music.bitchord"
                 appCategory = "public.app-category.music"
                 minimumSystemVersion = "12.0"
+                dockName = "BitChord"
+                infoPlist {
+                    extraKeysRawXml = """
+                        <key>NSRequiresAquaSystemAppearance</key>
+                        <false/>
+                    """.trimIndent()
+                }
             }
 
             linux {

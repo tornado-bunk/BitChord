@@ -140,4 +140,3 @@ class DesktopCrossfadePositionTest {
         assertTrue(majorReseekNeeded, "major change in cue point must trigger re-seek")
     }
 }
-

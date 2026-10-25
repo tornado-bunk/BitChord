@@ -32,7 +32,7 @@ jobs:
       - run: chmod +x gradlew
 
       - name: Tests
-        run: ./gradlew :shared:jvmTest :desktopApp:test
+        run: ./gradlew :shared:jvmTest :desktopUi:jvmTest :desktopApp:test
 
       - name: Build the distributable
         run: ./gradlew :desktopApp:createDistributable
@@ -51,6 +51,7 @@ jobs:
           path: |
             desktopApp/build/reports/tests/
             shared/build/reports/tests/
+            desktopUi/build/reports/tests/
 
   desktop-windows:
     name: Desktop · Windows
@@ -76,7 +77,7 @@ jobs:
         run: cmake --version
 
       - name: Tests
-        run: .\gradlew.bat :shared:jvmTest :desktopApp:test
+        run: .\gradlew.bat :shared:jvmTest :desktopUi:jvmTest :desktopApp:test
 
       - name: Build the distributable
         run: .\gradlew.bat :desktopApp:createDistributable
@@ -98,10 +99,11 @@ jobs:
           path: |
             desktopApp/build/reports/tests/
             shared/build/reports/tests/
+            desktopUi/build/reports/tests/
 
   desktop-macos:
     name: Desktop · macOS
-    runs-on: macos-14
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -121,12 +123,12 @@ jobs:
       - run: chmod +x gradlew
 
       - name: Tests
-        run: ./gradlew :shared:jvmTest :desktopApp:test
+        run: ./gradlew :shared:jvmTest :desktopUi:jvmTest :desktopApp:test
 
       - name: Build the distributable
         run: ./gradlew :desktopApp:createDistributable
 
-      - name: The analyser and nowplaying are in the jar
+      - name: The analyser and models are in the jar
         run: |
           jar=$(ls desktopApp/build/compose/binaries/main/app/BitChord.app/Contents/app/desktopApp*.jar)
           jar tf "$jar" | grep -q 'native/libbitchord_analysis.dylib'
@@ -141,6 +143,7 @@ jobs:
           path: |
             desktopApp/build/reports/tests/
             shared/build/reports/tests/
+            desktopUi/build/reports/tests/
 
   android:
     name: Android
