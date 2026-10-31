@@ -1,5 +1,7 @@
 package com.music.bitchord.desktop
 
+import com.music.bitchord.data.model.withCorrectedType
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -132,7 +134,8 @@ internal object DesktopSearchHistory {
     }
 
     private fun load(): List<SearchHistoryEntity> =
-        runCatching { json.decodeFromString(serializer, persistence.string(KEY, "[]")) }.getOrDefault(emptyList())
+        runCatching { json.decodeFromString(serializer, persistence.string(KEY, "[]")) }
+            .getOrDefault(emptyList()).map { it.withCorrectedType() }
 
     private const val KEY = "search_entities"
     private const val MAX_ENTRIES = 20
